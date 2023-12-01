@@ -1,16 +1,10 @@
 const vertexShaderStr = `
 attribute vec2 a_position;
+
 uniform vec2 u_resolution;
-uniform vec2 u_translation;
-uniform vec2 u_rotation;
-uniform vec2 u_rotationCenter;
+uniform mat3 u_matrix;
 void main(){
-    vec2 achorPosition = a_position - u_rotationCenter;
-    vec2 rotatedPosition = vec2(
-      achorPosition.x * u_rotation.y + achorPosition.y * u_rotation.x,
-      achorPosition.y * u_rotation.y - achorPosition.x * u_rotation.x
-    );
-    vec2 position = rotatedPosition + u_translation;
+    vec2 position = (u_matrix * vec3(a_position, 1)).xy;
     vec2 zeroToOne = position / u_resolution;
     vec2 zeroToTwo = zeroToOne * 2.0;
     vec2 clipSpace = zeroToTwo - 1.0;
@@ -26,6 +20,65 @@ void main(){
 }
 `;
 
+class Matrix2DOp {
+  /**
+   *
+   * @param {number[]} array1
+   * @param {number[]} array2
+   * @returns {number[]}
+   */
+  static multiply(array1, array2) {
+    if (array1.length !== 9 || array2.length !== 9) {
+      return;
+    }
+    const a00 = array1[0 * 3 + 0];
+    const a01 = array1[0 * 3 + 1];
+    const a02 = array1[0 * 3 + 2];
+    const a10 = array1[1 * 3 + 0];
+    const a11 = array1[1 * 3 + 1];
+    const a12 = array1[1 * 3 + 2];
+    const a20 = array1[2 * 3 + 0];
+    const a21 = array1[2 * 3 + 1];
+    const a22 = array1[2 * 3 + 2];
+    const b00 = array2[0 * 3 + 0];
+    const b01 = array2[0 * 3 + 1];
+    const b02 = array2[0 * 3 + 2];
+    const b10 = array2[1 * 3 + 0];
+    const b11 = array2[1 * 3 + 1];
+    const b12 = array2[1 * 3 + 2];
+    const b20 = array2[2 * 3 + 0];
+    const b21 = array2[2 * 3 + 1];
+    const b22 = array2[2 * 3 + 2];
+
+    return [
+      b00 * a00 + b01 * a10 + b02 * a20,
+      b00 * a01 + b01 * a11 + b02 * a21,
+      b00 * a02 + b01 * a12 + b02 * a22,
+      b10 * a00 + b11 * a10 + b12 * a20,
+      b10 * a01 + b11 * a11 + b12 * a21,
+      b10 * a02 + b11 * a12 + b12 * a22,
+      b20 * a00 + b21 * a10 + b22 * a20,
+      b20 * a01 + b21 * a11 + b22 * a21,
+      b20 * a02 + b21 * a12 + b22 * a22,
+    ];
+  }
+
+  static getTranslationArray(x, y) {
+    return [1, 0, 0, 0, 1, 0, x, y, 1];
+  }
+
+  static getRotationArray(angle) {
+    const radian = (Math.PI * angle) / 180;
+    const c = Math.cos(radian);
+    const s = Math.sin(radian);
+    return [c, -s, 0, s, c, 0, 0, 0, 1];
+  }
+
+  static getScalingArray(x, y) {
+    return [x, 0, 0, 0, y, 0, 0, 0, 1];
+  }
+}
+
 /**
  *
  * @param {WebGLRenderingContext} gl
@@ -40,7 +93,7 @@ function createShader(gl, type, source) {
   if (success) {
     return shader;
   } else {
-    console.log(gl.getShaderInfoLog(shader));
+    console.error(gl.getShaderInfoLog(shader));
     gl.deleteShader(shader);
     return null;
   }
@@ -63,7 +116,7 @@ function createProgram(gl, vertexShader, fragmentShader) {
   if (success) {
     return program;
   } else {
-    console.log(gl.getProgramInfoLog(program));
+    console.error(gl.getProgramInfoLog(program));
     gl.deleteProgram(program);
     return null;
   }
@@ -192,15 +245,7 @@ function main() {
     program,
     "u_resolution"
   );
-  const translationUniformLocation = gl.getUniformLocation(
-    program,
-    "u_translation"
-  );
-  const rotationUniformLocation = gl.getUniformLocation(program, "u_rotation");
-  const rotationCenterUniformLocation = gl.getUniformLocation(
-    program,
-    "u_rotationCenter"
-  );
+  const matrixUniformLocation = gl.getUniformLocation(program, "u_matrix");
   const colorUniformLocation = gl.getUniformLocation(program, "u_color");
 
   // 전달 받은 데이터를 가지고 canvas에 그리기
@@ -228,11 +273,16 @@ function main() {
     // 셰이더 연결
     gl.useProgram(program);
 
+    const translationMatrix = Matrix2DOp.getTranslationArray(...translation);
+    const rotationMatrix = Matrix2DOp.getRotationArray(angle);
+    const reversedCenter = center.map((item) => -item);
+    const centerMatrix = Matrix2DOp.getTranslationArray(...reversedCenter);
+
+    const matrix = Matrix2DOp.multiply(translationMatrix, rotationMatrix);
+
     // 셰이더의 uniform 속성 정의
     gl.uniform2f(resolutionUniformLocation, gl.canvas.width, gl.canvas.height);
-    gl.uniform2fv(translationUniformLocation, translation);
-    gl.uniform2fv(rotationUniformLocation, getRotation(angle));
-    gl.uniform2fv(rotationCenterUniformLocation, center);
+    gl.uniformMatrix3fv(matrixUniformLocation, false, matrix);
     gl.uniform4fv(colorUniformLocation, color);
 
     // Triangles 방식으로 도형 그리기
@@ -254,7 +304,7 @@ function main() {
   ];
 
   function getPoints(positions, dimension) {
-    const points = positions.filter((_, index) => index % 2 === dimension)
+    const points = positions.filter((_, index) => index % 2 === dimension);
     return points.filter((item, index) => points.indexOf(item) !== index);
   }
 
@@ -281,7 +331,7 @@ function main() {
     const sec = timestamp / 1000;
     translation[0] =
       ((sec * window.innerWidth - width) / 3) % (window.innerWidth - width);
-    const angle = (sec * 90 * Math.PI) / 180;
+    const angle = sec * 90;
     draw(positions, translation, angle, center, color);
     requestAnimationFrame(animate);
   }
