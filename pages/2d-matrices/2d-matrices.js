@@ -1,14 +1,10 @@
 const vertexShaderStr = `
 attribute vec2 a_position;
 
-uniform vec2 u_resolution;
 uniform mat3 u_matrix;
 void main(){
     vec2 position = (u_matrix * vec3(a_position, 1)).xy;
-    vec2 zeroToOne = position / u_resolution;
-    vec2 zeroToTwo = zeroToOne * 2.0;
-    vec2 clipSpace = zeroToTwo - 1.0;
-    gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+    gl_Position = vec4(position, 0, 1);
 }
 `;
 const fragmentShaderStr = `
@@ -25,11 +21,11 @@ class Matrix2DOp {
    *
    * @param {number[]} array1
    * @param {number[]} array2
-   * @returns {number[]}
+   * @returns {number[] | null}
    */
   static multiply(array1, array2) {
     if (array1.length !== 9 || array2.length !== 9) {
-      return;
+      return null;
     }
     const a00 = array1[0 * 3 + 0];
     const a01 = array1[0 * 3 + 1];
@@ -76,6 +72,14 @@ class Matrix2DOp {
 
   static getScalingArray(x, y) {
     return [x, 0, 0, 0, y, 0, 0, 0, 1];
+  }
+
+  static getIdentityArray() {
+    return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  }
+
+  static getProjectionArray(width, height) {
+    return [2 / width, 0, 0, 0, -2 / height, 0, -1, 1, 1];
   }
 }
 
@@ -241,16 +245,12 @@ function main() {
 
   // 프로그램의 속성마다 위치를 js 변수에 저장하기
   const positionAttributeLocation = gl.getAttribLocation(program, "a_position");
-  const resolutionUniformLocation = gl.getUniformLocation(
-    program,
-    "u_resolution"
-  );
   const matrixUniformLocation = gl.getUniformLocation(program, "u_matrix");
   const colorUniformLocation = gl.getUniformLocation(program, "u_color");
 
   // 전달 받은 데이터를 가지고 canvas에 그리기
   let positionBuffer = null;
-  function draw(positions, translation, angle, center, color) {
+  function draw(positions, translation, angle, scale, anchor, color) {
     // window 창 크기에 맞게 canvas 크기 조절
     resizeCanvasToDisplaySize(canvas);
 
@@ -275,13 +275,25 @@ function main() {
 
     const translationMatrix = Matrix2DOp.getTranslationArray(...translation);
     const rotationMatrix = Matrix2DOp.getRotationArray(angle);
-    const reversedCenter = center.map((item) => -item);
-    const centerMatrix = Matrix2DOp.getTranslationArray(...reversedCenter);
+    const scaleMatrix = Matrix2DOp.getScalingArray(...scale);
+    // const scaledAnchor = Vector2DOp.multiply(scale, anchor);
+    const reversedAnchor = anchor.map((item) => -item);
+    const anchorMatrix = Matrix2DOp.getTranslationArray(...reversedAnchor);
 
-    const matrix = Matrix2DOp.multiply(translationMatrix, rotationMatrix);
+    const identityMatrix = Matrix2DOp.getIdentityArray();
+    const matrices = [
+      anchorMatrix,
+      scaleMatrix,
+      rotationMatrix,
+      translationMatrix,
+      Matrix2DOp.getProjectionArray(gl.canvas.width, gl.canvas.height),
+    ];
+    const matrix = matrices.reduce(
+      (prevMatrix, matrix) => Matrix2DOp.multiply(matrix, prevMatrix),
+      identityMatrix
+    );
 
     // 셰이더의 uniform 속성 정의
-    gl.uniform2f(resolutionUniformLocation, gl.canvas.width, gl.canvas.height);
     gl.uniformMatrix3fv(matrixUniformLocation, false, matrix);
     gl.uniform4fv(colorUniformLocation, color);
 
@@ -310,11 +322,7 @@ function main() {
 
   function get2DCenter(positions) {
     function getCenterPoint(points) {
-      const infos = points.reduce(
-        ([sum, length], x) => [sum + x, length + 1],
-        [0, 0]
-      );
-      return infos[0] / infos[1];
+      return (Math.max(...points) + Math.min(...points)) / 2;
     }
     return [
       getCenterPoint(getPoints(positions, 0)),
@@ -323,16 +331,18 @@ function main() {
   }
 
   const center = get2DCenter(positions);
-  const translation = [0, 200];
+  const translation = [200, 200];
   const width = Math.max(...getPoints(positions, 0));
   const color = [Math.random(), Math.random(), Math.random(), 1];
+  const scale = [2, 1];
 
   function animate(timestamp) {
     const sec = timestamp / 1000;
     translation[0] =
       ((sec * window.innerWidth - width) / 3) % (window.innerWidth - width);
     const angle = sec * 90;
-    draw(positions, translation, angle, center, color);
+    scale[0] = 2 * Math.sin(sec);
+    draw(positions, translation, angle, scale, center, color);
     requestAnimationFrame(animate);
   }
   requestAnimationFrame(animate);
